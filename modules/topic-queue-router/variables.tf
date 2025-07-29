@@ -54,3 +54,9 @@ variable "aws_region" {
   type        = string
   default     = "us-west-2"
 }
+
+variable "use_aws_managed_msk_policy" {
+  description = "Use AWS managed AWSLambdaMSKExecutionRole policy instead of custom policy"
+  type        = bool
+  default     = false
+}

@@ -53,14 +53,16 @@ data "aws_vpc" "main" {
   id = var.vpc_id
 }
 
+data "aws_caller_identity" "current" {}
+
 data "aws_subnets" "private" {
   filter {
     name   = "vpc-id"
     values = [var.vpc_id]
   }
   filter {
-    name   = "tag:Type"
-    values = ["private"]
+    name   = "map-public-ip-on-launch"
+    values = ["false"]
   }
 }
 
@@ -119,46 +121,58 @@ resource "aws_iam_role" "lambda_role" {
 }
 
 # Lambda execution policy
+# Following AWS best practices for Lambda-MSK integration
 resource "aws_iam_policy" "lambda_policy" {
-  name = "${local.environment}-topic-queue-router-policy"
+  name        = "${local.environment}-topic-queue-router-policy"
+  description = "IAM policy for Lambda function to consume from MSK and route to SQS"
   
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
+        Sid    = "CloudWatchLogsPermissions"
         Effect = "Allow"
         Action = [
           "logs:CreateLogGroup",
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
-        Resource = "arn:aws:logs:*:*:*"
+        Resource = "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:*"
       },
       {
+        Sid    = "VPCNetworkingPermissions"
         Effect = "Allow"
         Action = [
+          # Network interface management for VPC Lambda
           "ec2:CreateNetworkInterface",
           "ec2:DescribeNetworkInterfaces",
           "ec2:DeleteNetworkInterface",
           "ec2:AttachNetworkInterface",
-          "ec2:DetachNetworkInterface"
+          "ec2:DetachNetworkInterface",
+          # Required for MSK event source mapping
+          "ec2:DescribeSecurityGroups",
+          "ec2:DescribeSubnets",
+          "ec2:DescribeVpcs"
         ]
         Resource = "*"
       },
       {
+        Sid    = "MSKClusterPermissions"
         Effect = "Allow"
         Action = [
           "kafka:DescribeCluster",
-          "kafka:GetBootstrapBrokers",
-          "kafka:DescribeClusterV2"
+          "kafka:DescribeClusterV2", # Required for both provisioned and serverless MSK
+          "kafka:GetBootstrapBrokers"
         ]
         Resource = data.aws_msk_cluster.kafka.arn
       },
       {
+        Sid    = "SQSDestinationPermissions"
         Effect = "Allow"
         Action = [
           "sqs:SendMessage",
-          "sqs:SendMessageBatch"
+          "sqs:SendMessageBatch",
+          "sqs:GetQueueAttributes" # For error handling and monitoring
         ]
         Resource = [
           for queue in aws_sqs_queue.products : queue.arn
@@ -170,15 +184,23 @@ resource "aws_iam_policy" "lambda_policy" {
   tags = local.common_tags
 }
 
+# Attach custom policy (always needed for SQS permissions)
 resource "aws_iam_role_policy_attachment" "lambda_policy" {
   role       = aws_iam_role.lambda_role.name
   policy_arn = aws_iam_policy.lambda_policy.arn
 }
 
-resource "aws_iam_role_policy_attachment" "lambda_vpc_execution" {
+# Optionally attach AWS managed MSK execution role for VPC/MSK permissions
+resource "aws_iam_role_policy_attachment" "lambda_msk_execution" {
+  count      = var.use_aws_managed_msk_policy ? 1 : 0
   role       = aws_iam_role.lambda_role.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaMSKExecutionRole"
 }
+
+# Note: If use_aws_managed_msk_policy is false (default), our custom policy
+# includes all necessary VPC and MSK permissions following AWS best practices.
+# If true, we use the AWS managed policy for VPC/MSK permissions and our
+# custom policy only for SQS permissions.
 
 # Security group for Lambda
 resource "aws_security_group" "lambda_sg" {
@@ -241,7 +263,7 @@ resource "aws_lambda_function" "router" {
   
   depends_on = [
     aws_iam_role_policy_attachment.lambda_policy,
-    aws_iam_role_policy_attachment.lambda_vpc_execution,
+    aws_iam_role_policy_attachment.lambda_msk_execution,
     aws_cloudwatch_log_group.lambda_logs
   ]
 }
