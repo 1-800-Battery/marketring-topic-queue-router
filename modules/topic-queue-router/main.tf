@@ -201,7 +201,7 @@ resource "aws_security_group" "lambda_sg" {
 # Package Lambda function
 data "archive_file" "lambda_zip" {
   type        = "zip"
-  source_dir  = "${path.module}/../src"
+  source_dir  = "${path.module}/../../src"
   output_path = "${path.module}/router.zip"
   excludes    = ["tests", "__pycache__", "*.pyc"]
 }

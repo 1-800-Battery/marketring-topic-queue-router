@@ -58,7 +58,7 @@ module "topic_queue_router" {
   source = "../../modules/topic-queue-router"
 
   environment             = local.environment
-  kafka_cluster_name      = "marketring-msk-cluster-${local.environment}"
+  kafka_cluster_name      = "marketring-msk-${local.environment}"
   vpc_id                  = data.aws_vpc.main.id
   msk_security_group_id   = data.terraform_remote_state.msk.outputs.client_access_security_group_id
   log_level              = var.log_level
